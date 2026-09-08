@@ -66,6 +66,7 @@ describe("direct OpenAI contract", () => {
     const body = buildExtractionRequest(
       [{ kind: "text", text: "safe test fixture" }],
       "en",
+      [],
     );
     expect(body.model).toBe("gpt-5.6-terra");
     expect(body.reasoning).toEqual({ effort: "high" });
@@ -77,7 +78,7 @@ describe("direct OpenAI contract", () => {
   });
 
   it("instructs extraction and bounded repair about evidence-first graph invariants", async () => {
-    const body = buildExtractionRequest([], "ru");
+    const body = buildExtractionRequest([], "ru", []);
     const requestJson = JSON.stringify(body);
     expect(requestJson).toContain("laneId");
     expect(requestJson).toContain("Owner to confirm");
@@ -142,7 +143,7 @@ describe("direct OpenAI contract", () => {
     });
     expect(question?.text).toContain("Which business process and handoffs");
     expect(ir).not.toHaveProperty("diagramType");
-    const request = JSON.stringify(buildExtractionRequest([], "en"));
+    const request = JSON.stringify(buildExtractionRequest([], "en", []));
     expect(request).toContain("BPMN 2.0 only");
     expect(request).toContain("architecture or data-flow");
   });
@@ -179,7 +180,7 @@ describe("direct OpenAI contract", () => {
   });
 
   it("requires every provider object property and makes logical optionals nullable", () => {
-    const schema = buildExtractionRequest([], "en").text.format.schema;
+    const schema = buildExtractionRequest([], "en", []).text.format.schema;
 
     expectEveryObjectPropertyRequired(schema);
     expectNullable(
@@ -197,6 +198,57 @@ describe("direct OpenAI contract", () => {
         "properties.annotations.items.properties.attachedToId",
       ),
     );
+  });
+
+  it("pins exact eligible source IDs on every sourceRef path without request leakage", () => {
+    const exactIds = ["source:Alpha/09", " source-bytes-preserved "];
+    const firstSchema = buildExtractionRequest([], "en", exactIds).text.format
+      .schema;
+    const sourceIdPaths = [
+      "properties.nodes.items.properties.sourceRefs.items.properties.sourceId",
+      "properties.flows.items.properties.sourceRefs.items.properties.sourceId",
+      "properties.annotations.items.properties.sourceRefs.items.properties.sourceId",
+    ];
+
+    for (const path of sourceIdPaths)
+      expect(schemaAtPath(firstSchema, path).enum).toEqual(exactIds);
+
+    const secondSchema = buildExtractionRequest([], "en", ["source_second"])
+      .text.format.schema;
+    for (const path of sourceIdPaths) {
+      expect(schemaAtPath(secondSchema, path).enum).toEqual(["source_second"]);
+      expect(schemaAtPath(firstSchema, path).enum).toEqual(exactIds);
+    }
+  });
+
+  it("uses identical immutable source eligibility for initial and repair requests", () => {
+    const eligibleSourceIds = Object.freeze([
+      "source_original",
+      "source_refinement",
+    ]);
+    const initial = buildExtractionRequest(
+      [{ kind: "text", text: "[source:source_refinement]\nEvidence" }],
+      "en",
+      eligibleSourceIds,
+    );
+    const repair = buildExtractionRequest(
+      [
+        { kind: "text", text: "[source:source_refinement]\nEvidence" },
+        { kind: "text", text: "Synthetic repair instruction" },
+      ],
+      "en",
+      eligibleSourceIds,
+    );
+    const sourceIdPath =
+      "properties.nodes.items.properties.sourceRefs.items.properties.sourceId";
+
+    expect(schemaAtPath(initial.text.format.schema, sourceIdPath).enum).toEqual(
+      eligibleSourceIds,
+    );
+    expect(schemaAtPath(repair.text.format.schema, sourceIdPath).enum).toEqual(
+      eligibleSourceIds,
+    );
+    expect(eligibleSourceIds).toEqual(["source_original", "source_refinement"]);
   });
 
   it("normalizes nullable provider fields to the domain optional shape", async () => {
@@ -235,7 +287,7 @@ describe("direct OpenAI contract", () => {
       ),
     );
 
-    const { ir } = await extractProcess("test-key", [], "en");
+    const { ir } = await extractProcess("test-key", [], "en", ["source_text"]);
 
     expect(ir.nodes.every((node) => !("laneId" in node))).toBe(true);
     expect(ir.flows.every((flow) => !("condition" in flow))).toBe(true);
@@ -265,7 +317,9 @@ describe("direct OpenAI contract", () => {
       ),
     );
 
-    await expect(extractProcess("test-key", [], "en")).resolves.toMatchObject({
+    await expect(
+      extractProcess("test-key", [], "en", ["source_text"]),
+    ).resolves.toMatchObject({
       ir: SIMPLE_PROCESS_IR,
       metadata: {
         responseId: "response_completed",
@@ -273,6 +327,82 @@ describe("direct OpenAI contract", () => {
       },
     });
   });
+
+  it.each([
+    {
+      collection: "nodes",
+      rejectedId: "source_opaque-A",
+      buildPayload: () => {
+        const ir = structuredClone(SIMPLE_PROCESS_IR);
+        ir.nodes[0]!.sourceRefs = [
+          { sourceId: "source_opaque-A", locator: "synthetic node" },
+        ];
+        return ir;
+      },
+    },
+    {
+      collection: "flows",
+      rejectedId: "source_unlisted",
+      buildPayload: () => {
+        const ir = structuredClone(SIMPLE_PROCESS_IR);
+        ir.flows[0]!.sourceRefs = [
+          { sourceId: "source_unlisted", locator: "synthetic flow" },
+        ];
+        return ir;
+      },
+    },
+    {
+      collection: "annotations",
+      rejectedId: "source_opaque-a9",
+      buildPayload: () => {
+        const ir = structuredClone(SIMPLE_PROCESS_IR);
+        ir.annotations = [
+          {
+            id: "annotation_integrity",
+            text: "Synthetic annotation",
+            participantId: "participant_main",
+            sourceRefs: [
+              {
+                sourceId: "source_opaque-a9",
+                locator: "synthetic annotation",
+              },
+            ],
+          },
+        ];
+        return ir;
+      },
+    },
+  ])(
+    "rejects a structurally valid $collection reference outside exact eligibility",
+    async ({ rejectedId, buildPayload }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              id: "response_bad_reference",
+              model: "gpt-5.6-terra",
+              status: "completed",
+              output_text: JSON.stringify(buildPayload()),
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        ),
+      );
+
+      const rejection = extractProcess("test-key", [], "en", [
+        "source_opaque-A9",
+        "source_text",
+      ]);
+      await expect(rejection).rejects.toMatchObject({
+        code: "provider_unknown_source_reference",
+        message:
+          "The extraction provider returned an unknown source reference.",
+        retryable: false,
+      } satisfies Partial<ProviderError>);
+      await expect(rejection).rejects.not.toThrow(rejectedId);
+    },
+  );
 
   it.each(["incomplete", "failed", "cancelled", "in_progress"])(
     "rejects a %s response even when its output is parseable",
@@ -295,7 +425,9 @@ describe("direct OpenAI contract", () => {
         ),
       );
 
-      await expect(extractProcess("test-key", [], "en")).rejects.toMatchObject({
+      await expect(
+        extractProcess("test-key", [], "en", []),
+      ).rejects.toMatchObject({
         code: "provider_response_not_completed",
         message: "The extraction provider did not complete the response.",
       } satisfies Partial<ProviderError>);
@@ -339,7 +471,9 @@ describe("direct OpenAI contract", () => {
         ),
       );
 
-      await expect(extractProcess("test-key", [], "en")).rejects.toMatchObject({
+      await expect(
+        extractProcess("test-key", [], "en", []),
+      ).rejects.toMatchObject({
         code: "provider_missing_output",
         message: "The extraction provider returned no structured output.",
       } satisfies Partial<ProviderError>);
@@ -356,7 +490,9 @@ describe("direct OpenAI contract", () => {
         ),
     );
 
-    await expect(extractProcess("test-key", [], "en")).rejects.toMatchObject({
+    await expect(
+      extractProcess("test-key", [], "en", []),
+    ).rejects.toMatchObject({
       code: "openai_extraction_500",
       message: "Process extraction could not be completed.",
       retryable: true,

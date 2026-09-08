@@ -510,6 +510,119 @@ export async function getJobBaseVersion(
     .first<BaseDiagramSnapshot>();
 }
 
+const sourceSnapshotTypes = new Set<SourceRow["type"]>([
+  "text",
+  "audio",
+  "image",
+  "correction",
+  "csv",
+  "docx",
+  "xlsx",
+]);
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
+function parseTrustedSourceSnapshot(value: string | null): string[] {
+  if (value === null) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    return [];
+  }
+  if (!isUnknownArray(parsed)) return [];
+  const ids: string[] = [];
+  for (const item of parsed) {
+    if (
+      !isJsonObject(item) ||
+      Object.keys(item).length !== 3 ||
+      typeof item.id !== "string" ||
+      item.id.length === 0 ||
+      item.id.length > 100 ||
+      typeof item.name !== "string" ||
+      typeof item.type !== "string" ||
+      !sourceSnapshotTypes.has(item.type as SourceRow["type"])
+    )
+      return [];
+    ids.push(item.id);
+  }
+  return ids;
+}
+
+const MAX_TRUSTED_SOURCE_LINEAGE_DEPTH = 64;
+
+export async function getJobEligibleSourceIds(
+  db: D1Database,
+  jobId: string,
+): Promise<string[]> {
+  const job = await db
+    .prepare(
+      "SELECT project_id, generation_mode, base_version_id FROM jobs WHERE id = ?",
+    )
+    .bind(jobId)
+    .first<
+      Pick<JobRow, "project_id" | "generation_mode" | "base_version_id">
+    >();
+  if (!job) throw new Error("Generation job source context is unavailable.");
+
+  const selected = (
+    await db
+      .prepare(
+        "SELECT source_id FROM job_sources WHERE job_id = ? ORDER BY captured_at, source_id",
+      )
+      .bind(jobId)
+      .all<{ source_id: string }>()
+  ).results.map((row) => row.source_id);
+  const eligible = new Set(selected);
+  if (job.generation_mode !== "refine" || job.base_version_id === null)
+    return [...eligible];
+
+  const visited = new Set<string>();
+  let versionId: string | null = job.base_version_id;
+  for (
+    let depth = 0;
+    versionId !== null && depth < MAX_TRUSTED_SOURCE_LINEAGE_DEPTH;
+    depth += 1
+  ) {
+    if (visited.has(versionId))
+      throw new Error("Trusted source lineage is unavailable.");
+    visited.add(versionId);
+    const version: {
+      id: string;
+      project_id: string;
+      created_by: DiagramVersionRow["created_by"];
+      base_version_id: string | null;
+      source_snapshot_json: string | null;
+      trusted_job: number;
+    } | null = await db
+      .prepare(
+        "SELECT dv.id, dv.project_id, dv.created_by, dv.base_version_id, dv.source_snapshot_json, CASE WHEN j.id IS NULL THEN 0 ELSE 1 END AS trusted_job FROM diagram_versions dv LEFT JOIN jobs j ON j.id = dv.job_id AND j.project_id = dv.project_id WHERE dv.id = ?",
+      )
+      .bind(versionId)
+      .first();
+    if (!version || version.project_id !== job.project_id)
+      throw new Error("Trusted source lineage is unavailable.");
+    if (version.created_by !== "ai" || version.trusted_job !== 1) {
+      versionId = null;
+      break;
+    }
+    for (const sourceId of parseTrustedSourceSnapshot(
+      version.source_snapshot_json,
+    ))
+      eligible.add(sourceId);
+    versionId = version.base_version_id;
+  }
+  if (versionId !== null)
+    throw new Error("Trusted source lineage is unavailable.");
+  return [...eligible];
+}
+
 export async function claimGenerationJob(
   db: D1Database,
   projectId: string,

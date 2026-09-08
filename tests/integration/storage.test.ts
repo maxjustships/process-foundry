@@ -28,7 +28,10 @@ import {
 } from "../../app/lib/clarifications";
 import { deleteProjectWithWorkflow } from "../../app/lib/project-deletion.server";
 import { startGenerationWorkflowOrCompensate } from "../../app/lib/generation-start.server";
-import { loadExtractionInputsForJob } from "../../workers/generation";
+import {
+  loadExtractionContextForJob,
+  loadExtractionInputsForJob,
+} from "../../workers/generation";
 
 const missingWorkflow = {
   get(): Promise<WorkflowInstance> {
@@ -989,6 +992,211 @@ describe("D1 and R2 lifecycle", () => {
           input.text.includes("[base-diagram-snapshot]"),
       ),
     ).toBe(false);
+  });
+
+  it("authorizes selected evidence and exact same-project AI snapshot lineage only", async () => {
+    const project = await createProject(env.DB, "Trusted source lineage");
+    await addTextSource(project.id, "source_original", "Original evidence");
+    await addTextSource(project.id, "source_selected", "Selected evidence");
+    await addTextSource(project.id, "source_ambient", "Ambient evidence");
+
+    const initial = await createGenerationIntent(env.DB, {
+      projectId: project.id,
+      mode: "alternative",
+      sourceIds: ["source_original"],
+      clarificationIds: [],
+    });
+    const initialVersion = await saveReadyAiVersion(
+      env.DB,
+      project.id,
+      initial.jobId,
+      "<definitions />",
+      JSON.stringify(
+        getMockProcessIr(await getJobSources(env.DB, initial.jobId)),
+      ),
+    );
+    const refine = await createGenerationIntent(env.DB, {
+      projectId: project.id,
+      mode: "refine",
+      baseVersionId: initialVersion.id,
+      sourceIds: ["source_selected"],
+      clarificationIds: [],
+    });
+
+    await expect(
+      loadExtractionContextForJob(env, refine.jobId),
+    ).resolves.toMatchObject({
+      eligibleSourceIds: ["source_selected", "source_original"],
+    });
+
+    const otherProject = await createProject(env.DB, "Unrelated source owner");
+    await addTextSource(
+      otherProject.id,
+      "source_cross_project",
+      "Cross-project evidence",
+    );
+    const humanBase = await saveDiagramVersion(
+      env.DB,
+      otherProject.id,
+      null,
+      "<definitions />",
+      JSON.stringify({
+        ...getMockProcessIr([]),
+        annotations: [
+          {
+            id: "annotation_untrusted",
+            text: "Untrusted historical reference",
+            participantId: "participant_main",
+            sourceRefs: [
+              { sourceId: "source_cross_project", locator: "historical IR" },
+              {
+                sourceId: "source_ambient",
+                locator: "unrelated project source",
+              },
+            ],
+          },
+        ],
+      }),
+      "human",
+    );
+    await addTextSource(
+      otherProject.id,
+      "source_human_selected",
+      "Current selected evidence",
+    );
+    const humanRefine = await createGenerationIntent(env.DB, {
+      projectId: otherProject.id,
+      mode: "refine",
+      baseVersionId: humanBase.id,
+      sourceIds: ["source_human_selected"],
+      clarificationIds: [],
+    });
+    await expect(
+      loadExtractionContextForJob(env, humanRefine.jobId),
+    ).resolves.toMatchObject({
+      eligibleSourceIds: ["source_human_selected"],
+    });
+  });
+
+  it("ignores malformed AI snapshots and rejects corrupt lineage links safely", async () => {
+    const project = await createProject(env.DB, "Malformed source lineage");
+    await addTextSource(project.id, "source_current", "Current evidence");
+    await addTextSource(project.id, "source_base_input", "Base evidence");
+    const baseJob = await createGenerationIntent(env.DB, {
+      projectId: project.id,
+      mode: "alternative",
+      sourceIds: ["source_base_input"],
+      clarificationIds: [],
+    });
+    const malformedBase = await saveReadyAiVersion(
+      env.DB,
+      project.id,
+      baseJob.jobId,
+      "<definitions />",
+      JSON.stringify(getMockProcessIr([])),
+    );
+    await env.DB.prepare(
+      "UPDATE diagram_versions SET source_snapshot_json = ? WHERE id = ?",
+    )
+      .bind('[{"id":"source_must_not_escape"}]', malformedBase.id)
+      .run();
+    const refine = await createGenerationIntent(env.DB, {
+      projectId: project.id,
+      mode: "refine",
+      baseVersionId: malformedBase.id,
+      sourceIds: ["source_current"],
+      clarificationIds: [],
+    });
+    await expect(
+      loadExtractionContextForJob(env, refine.jobId),
+    ).resolves.toMatchObject({ eligibleSourceIds: ["source_current"] });
+
+    await env.DB.prepare(
+      "UPDATE diagram_versions SET source_snapshot_json = NULL WHERE id = ?",
+    )
+      .bind(malformedBase.id)
+      .run();
+    await expect(
+      loadExtractionContextForJob(env, refine.jobId),
+    ).resolves.toMatchObject({ eligibleSourceIds: ["source_current"] });
+
+    await env.DB.prepare(
+      "UPDATE diagram_versions SET base_version_id = ? WHERE id = ?",
+    )
+      .bind(malformedBase.id, malformedBase.id)
+      .run();
+    await expect(
+      loadExtractionContextForJob(env, refine.jobId),
+    ).rejects.toThrow("Trusted source lineage is unavailable.");
+
+    const otherProject = await createProject(env.DB, "Cross-project lineage");
+    const otherVersion = await saveDiagramVersion(
+      env.DB,
+      otherProject.id,
+      null,
+      "<definitions />",
+      null,
+      "ai",
+    );
+    await env.DB.prepare(
+      "UPDATE diagram_versions SET base_version_id = ? WHERE id = ?",
+    )
+      .bind(otherVersion.id, malformedBase.id)
+      .run();
+    await expect(
+      loadExtractionContextForJob(env, refine.jobId),
+    ).rejects.toThrow("Trusted source lineage is unavailable.");
+  });
+
+  it("retains original evidence through repeated trusted AI refinements", async () => {
+    const project = await createProject(env.DB, "Repeated refine lineage");
+    for (const id of ["source_first", "source_second", "source_third"])
+      await addTextSource(project.id, id, `Synthetic evidence for ${id}`);
+
+    const firstJob = await createGenerationIntent(env.DB, {
+      projectId: project.id,
+      mode: "alternative",
+      sourceIds: ["source_first"],
+      clarificationIds: [],
+    });
+    const firstVersion = await saveReadyAiVersion(
+      env.DB,
+      project.id,
+      firstJob.jobId,
+      "<definitions />",
+      JSON.stringify(
+        getMockProcessIr(await getJobSources(env.DB, firstJob.jobId)),
+      ),
+    );
+    const secondJob = await createGenerationIntent(env.DB, {
+      projectId: project.id,
+      mode: "refine",
+      baseVersionId: firstVersion.id,
+      sourceIds: ["source_second"],
+      clarificationIds: [],
+    });
+    const secondVersion = await saveReadyAiVersion(
+      env.DB,
+      project.id,
+      secondJob.jobId,
+      "<definitions />",
+      JSON.stringify(
+        getMockProcessIr(await getJobSources(env.DB, secondJob.jobId)),
+      ),
+    );
+    const thirdJob = await createGenerationIntent(env.DB, {
+      projectId: project.id,
+      mode: "refine",
+      baseVersionId: secondVersion.id,
+      sourceIds: ["source_third"],
+      clarificationIds: [],
+    });
+
+    await expect(
+      loadExtractionContextForJob(env, thirdJob.jobId),
+    ).resolves.toMatchObject({
+      eligibleSourceIds: ["source_third", "source_second", "source_first"],
+    });
   });
 
   it("rejects a question-answer source presented as an ordinary source", async () => {

@@ -5,13 +5,16 @@ import {
 } from "cloudflare:workers";
 import { BpmnModdle } from "bpmn-moddle";
 import {
+  assertEligibleSourceReferences,
   buildProcessIrRepairInstruction,
   enforceBpmnOnlyModalityQuestion,
   extractProcess,
   getMockProcessIr,
   PROMPT_VERSION,
+  ProviderError,
   transcribeAudio,
 } from "../ai/provider.server";
+import { NonRetryableError } from "cloudflare:workflows";
 import { compileProcessIr } from "../domain/bpmn-compiler";
 import {
   processIrSchema,
@@ -21,6 +24,7 @@ import {
 import {
   claimJobExecution,
   getJobBaseVersion,
+  getJobEligibleSourceIds,
   getJobOutputLocale,
   getJobSources,
   saveReadyAiVersion,
@@ -88,11 +92,64 @@ export async function loadExtractionInputsForJob(
   env: Env,
   jobId: string,
 ): ReturnType<typeof loadExtractionInputs> {
-  const [sources, baseVersion] = await Promise.all([
+  return (await loadExtractionContextForJob(env, jobId)).inputs;
+}
+
+export async function loadExtractionContextForJob(
+  env: Env,
+  jobId: string,
+): Promise<{
+  inputs: Awaited<ReturnType<typeof loadExtractionInputs>>;
+  eligibleSourceIds: string[];
+}> {
+  const [sources, baseVersion, eligibleSourceIds] = await Promise.all([
     getJobSources(env.DB, jobId),
     getJobBaseVersion(env.DB, jobId),
+    getJobEligibleSourceIds(env.DB, jobId),
   ]);
-  return loadExtractionInputs(env, sources, baseVersion);
+  return {
+    inputs: await loadExtractionInputs(env, sources, baseVersion),
+    eligibleSourceIds,
+  };
+}
+
+async function extractProcessForWorkflow(
+  apiKey: string,
+  inputs: Awaited<ReturnType<typeof loadExtractionInputs>>,
+  outputLocale: "en" | "ru",
+  eligibleSourceIds: readonly string[],
+): ReturnType<typeof extractProcess> {
+  try {
+    return await extractProcess(
+      apiKey,
+      inputs,
+      outputLocale,
+      eligibleSourceIds,
+    );
+  } catch (error) {
+    if (
+      error instanceof ProviderError &&
+      error.code === "provider_unknown_source_reference"
+    )
+      throw new NonRetryableError(error.message, error.code);
+    throw error;
+  }
+}
+
+function assertWorkflowSourceReferences(
+  ir: ProcessIR,
+  eligibleSourceIds: readonly string[],
+): void {
+  try {
+    assertEligibleSourceReferences(ir, eligibleSourceIds);
+  } catch (error) {
+    if (
+      error instanceof ProviderError &&
+      error.code === "provider_unknown_source_reference"
+    )
+      throw new NonRetryableError(error.message, error.code);
+    throw error;
+  }
 }
 
 export class GenerationWorkflow extends WorkflowEntrypoint<
@@ -208,6 +265,17 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
         },
       );
 
+      const loadedExtractionContext = await step.do(
+        "load-extraction-context",
+        async () => loadExtractionContextForJob(this.env, jobId),
+      );
+      const extractionContext = {
+        inputs: [...loadedExtractionContext.inputs],
+        eligibleSourceIds: Object.freeze([
+          ...loadedExtractionContext.eligibleSourceIds,
+        ]),
+      };
+
       let extraction = await step.do(
         "extract-process-ir",
         {
@@ -218,7 +286,6 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
           await setJobStatus(this.env.DB, jobId, "extracting");
           const sources = await getJobSources(this.env.DB, jobId);
           if (this.env.MOCK_AI === "true") {
-            const inputs = await loadExtractionInputsForJob(this.env, jobId);
             const attemptCount = await this.env.DB.prepare(
               "SELECT COUNT(*) AS value FROM job_attempts WHERE job_id = ?",
             )
@@ -226,7 +293,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
               .first<{ value: number }>();
             if (
               attemptCount?.value === 1 &&
-              inputs.some(
+              extractionContext.inputs.some(
                 (input) =>
                   input.kind === "text" &&
                   input.text.includes("[synthetic:fail-first-extraction]"),
@@ -235,7 +302,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
               throw new Error("Synthetic extraction failure.");
             const mockIr = getMockProcessIr(sources, outputLocale);
             if (
-              inputs.some(
+              extractionContext.inputs.some(
                 (input) =>
                   input.kind === "text" &&
                   input.text.includes("[synthetic:changed-owner-question]"),
@@ -246,7 +313,11 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
                   ? "Какая роль утверждает завершённую проверку?"
                   : "Which role approves the completed review?";
             return {
-              ir: enforceBpmnOnlyModalityQuestion(mockIr, inputs, outputLocale),
+              ir: enforceBpmnOnlyModalityQuestion(
+                mockIr,
+                extractionContext.inputs,
+                outputLocale,
+              ),
               metadata: {
                 responseId: `mock-${jobId}`,
                 returnedModel: "gpt-5.6-terra",
@@ -254,37 +325,43 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
               },
             };
           }
-          return extractProcess(
+          return extractProcessForWorkflow(
             getRequiredSecret(this.env, "OPENAI_API_KEY"),
-            await loadExtractionInputsForJob(this.env, jobId),
+            extractionContext.inputs,
             outputLocale,
+            extractionContext.eligibleSourceIds,
           );
         },
       );
 
       let ir: ProcessIR = processIrSchema.parse(extraction.ir);
+      assertWorkflowSourceReferences(ir, extractionContext.eligibleSourceIds);
       const firstIssues = validateProcessIr(ir);
       if (firstIssues.length && this.env.MOCK_AI !== "true") {
         extraction = await step.do(
           "repair-process-ir-once",
           { retries: { limit: 1, delay: "10 seconds" }, timeout: "10 minutes" },
           async () => {
-            const inputs = await loadExtractionInputsForJob(this.env, jobId);
-            inputs.push({
-              kind: "text",
-              text: buildProcessIrRepairInstruction(
-                firstIssues.map((issue) => issue.code),
-                outputLocale,
-              ),
-            });
-            return extractProcess(
+            const inputs = [
+              ...extractionContext.inputs,
+              {
+                kind: "text",
+                text: buildProcessIrRepairInstruction(
+                  firstIssues.map((issue) => issue.code),
+                  outputLocale,
+                ),
+              } satisfies { kind: "text"; text: string },
+            ];
+            return extractProcessForWorkflow(
               getRequiredSecret(this.env, "OPENAI_API_KEY"),
               inputs,
               outputLocale,
+              extractionContext.eligibleSourceIds,
             );
           },
         );
         ir = processIrSchema.parse(extraction.ir);
+        assertWorkflowSourceReferences(ir, extractionContext.eligibleSourceIds);
       }
       await storeAiRequestEvent(this.env.DB, jobId, `${jobId}:extraction`, 40, {
         provider: "openai",

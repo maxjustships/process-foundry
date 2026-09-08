@@ -39,10 +39,11 @@ const extraction = await extractProcess(
   [
     {
       kind: "text",
-      text: "A request is received, reviewed, processed, and completed.",
+      text: "[source:source_smoke]\nA request is received, reviewed, processed, and completed.",
     },
   ],
   "en",
+  ["source_smoke"],
 );
 console.log(
   JSON.stringify({

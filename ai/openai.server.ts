@@ -100,6 +100,57 @@ function toStrictProviderJsonSchema(value: unknown): unknown {
 const providerProcessIrJsonSchema =
   toStrictProviderJsonSchema(processIrJsonSchema);
 
+const sourceIdSchemaPaths = [
+  [
+    "properties",
+    "nodes",
+    "items",
+    "properties",
+    "sourceRefs",
+    "items",
+    "properties",
+    "sourceId",
+  ],
+  [
+    "properties",
+    "flows",
+    "items",
+    "properties",
+    "sourceRefs",
+    "items",
+    "properties",
+    "sourceId",
+  ],
+  [
+    "properties",
+    "annotations",
+    "items",
+    "properties",
+    "sourceRefs",
+    "items",
+    "properties",
+    "sourceId",
+  ],
+] as const;
+
+function providerSchemaWithEligibleSourceIds(
+  eligibleSourceIds: readonly string[],
+): unknown {
+  const schema = structuredClone(providerProcessIrJsonSchema);
+  for (const path of sourceIdSchemaPaths) {
+    let current = schema;
+    for (const segment of path) {
+      if (!isJsonObject(current))
+        throw new Error("The ProcessIR provider schema is invalid.");
+      current = current[segment];
+    }
+    if (!isJsonObject(current))
+      throw new Error("The ProcessIR provider schema is invalid.");
+    current.enum = [...eligibleSourceIds];
+  }
+  return schema;
+}
+
 function omitNullProperties(
   value: unknown,
   propertyNames: readonly string[],
@@ -189,6 +240,7 @@ export function enforceBpmnOnlyModalityQuestion(
 export function buildExtractionRequest(
   inputs: ExtractionInput[],
   outputLocale: OutputLocale,
+  eligibleSourceIds: readonly string[],
 ) {
   const content: Array<
     | { type: "input_text"; text: string }
@@ -226,7 +278,7 @@ export function buildExtractionRequest(
       format: {
         type: "json_schema",
         name: "process_ir",
-        schema: providerProcessIrJsonSchema,
+        schema: providerSchemaWithEligibleSourceIds(eligibleSourceIds),
         strict: true,
       },
     },
@@ -293,6 +345,20 @@ export class ProviderError extends Error {
   }
 }
 
+export function assertEligibleSourceReferences(
+  ir: ProcessIR,
+  eligibleSourceIds: readonly string[],
+): void {
+  const eligible = new Set(eligibleSourceIds);
+  for (const element of [...ir.nodes, ...ir.flows, ...ir.annotations])
+    for (const sourceRef of element.sourceRefs)
+      if (!eligible.has(sourceRef.sourceId))
+        throw new ProviderError(
+          "provider_unknown_source_reference",
+          "The extraction provider returned an unknown source reference.",
+        );
+}
+
 export async function transcribeAudio(
   apiKey: string,
   audio: Blob,
@@ -326,6 +392,7 @@ export async function extractProcess(
   apiKey: string,
   inputs: ExtractionInput[],
   outputLocale: OutputLocale,
+  eligibleSourceIds: readonly string[],
 ): Promise<{
   ir: ProcessIR;
   metadata: {
@@ -340,7 +407,9 @@ export async function extractProcess(
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(buildExtractionRequest(inputs, outputLocale)),
+    body: JSON.stringify(
+      buildExtractionRequest(inputs, outputLocale, eligibleSourceIds),
+    ),
   });
   if (!response.ok)
     throw new ProviderError(
@@ -359,6 +428,7 @@ export async function extractProcess(
     inputs,
     outputLocale,
   );
+  assertEligibleSourceReferences(ir, eligibleSourceIds);
   const usage = Object.fromEntries(
     Object.entries(envelope.usage ?? {}).filter(
       (entry): entry is [string, number] => typeof entry[1] === "number",

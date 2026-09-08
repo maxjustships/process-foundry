@@ -1,8 +1,10 @@
 import {
+  assertEligibleSourceReferences,
   buildProcessIrRepairInstruction,
   enforceBpmnOnlyModalityQuestion,
   extractProcess,
   PROMPT_VERSION,
+  ProviderError,
   transcribeAudio,
 } from "./openai.server";
 import type { ProcessIR } from "../domain/process-ir";
@@ -10,10 +12,12 @@ import type { SourceRow } from "../app/lib/repository.server";
 import type { OutputLocale } from "../domain/output-locale";
 
 export {
+  assertEligibleSourceReferences,
   buildProcessIrRepairInstruction,
   enforceBpmnOnlyModalityQuestion,
   extractProcess,
   PROMPT_VERSION,
+  ProviderError,
   transcribeAudio,
 };
 
