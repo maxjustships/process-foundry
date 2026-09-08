@@ -182,8 +182,8 @@ describe("direct OpenAI contract", () => {
   });
 
   it("requires every provider object property and makes logical optionals nullable", () => {
-    const schema = buildExtractionRequest([], "en", ["source_text"]).text
-      .format.schema;
+    const schema = buildExtractionRequest([], "en", ["source_text"]).text.format
+      .schema;
 
     expectEveryObjectPropertyRequired(schema);
     expectNullable(
@@ -258,7 +258,9 @@ describe("direct OpenAI contract", () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
 
-    await expect(extractProcess("test-key", [], "en", [])).rejects.toMatchObject({
+    await expect(
+      extractProcess("test-key", [], "en", []),
+    ).rejects.toMatchObject({
       code: "provider_source_eligibility_empty",
       message: "Process extraction requires at least one eligible source.",
       retryable: false,

@@ -1,9 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:workers";
-import {
-  applyD1Migrations,
-  introspectWorkflowInstance,
-} from "cloudflare:test";
+import { applyD1Migrations, introspectWorkflowInstance } from "cloudflare:test";
 import {
   addSource,
   claimGenerationJob,
@@ -27,7 +24,8 @@ class SizeLimitedWorkflowStep {
       typeof configOrCallback === "function"
         ? (configOrCallback as () => Promise<T>)
         : configuredCallback;
-    if (!callback) throw new Error(`Missing callback for Workflow step ${name}.`);
+    if (!callback)
+      throw new Error(`Missing callback for Workflow step ${name}.`);
     const result = await callback();
     const serialized = JSON.stringify(result);
     if (serialized === undefined)
@@ -136,9 +134,9 @@ describe("Workflow source-reference persistence gate", () => {
       NORMAL_STEP_RESULT_LIMIT_BYTES,
     );
     for (const serialized of step.serializedResults.values()) {
-      expect(new TextEncoder().encode(serialized).byteLength).toBeLessThanOrEqual(
-        NORMAL_STEP_RESULT_LIMIT_BYTES,
-      );
+      expect(
+        new TextEncoder().encode(serialized).byteLength,
+      ).toBeLessThanOrEqual(NORMAL_STEP_RESULT_LIMIT_BYTES);
       expect(serialized).not.toContain("data:image/png;base64,");
     }
   });

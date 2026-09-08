@@ -324,11 +324,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
                   ? "Какая роль утверждает завершённую проверку?"
                   : "Which role approves the completed review?";
             return {
-              ir: enforceBpmnOnlyModalityQuestion(
-                mockIr,
-                inputs,
-                outputLocale,
-              ),
+              ir: enforceBpmnOnlyModalityQuestion(mockIr, inputs, outputLocale),
               metadata: {
                 responseId: `mock-${jobId}`,
                 returnedModel: "gpt-5.6-terra",
