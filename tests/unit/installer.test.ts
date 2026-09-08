@@ -60,6 +60,15 @@ const missingR2Diagnostic =
 const missingD1Diagnostic =
   "\u001b[31m\u2718 [ERROR]\u001b[0m \u001b[1mCouldn't find a D1 DB with name or binding 'pf-fixture-db' in your config or the API.\u001b[0m\n";
 
+type BuiltProductionFixture = {
+  name: string;
+  vars: Record<string, string>;
+  secrets: { required: string[] };
+  d1_databases: Array<Record<string, unknown>>;
+  r2_buckets: Array<Record<string, unknown>>;
+  workflows: Array<Record<string, unknown>>;
+};
+
 function fixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "pf-installer-test-"));
   fixtureRoots.push(root);
@@ -119,6 +128,53 @@ function fixture() {
   };
 }
 
+function writeBuiltProductionFixture(checkout: string) {
+  const canonicalPath = path.join(checkout, "wrangler.jsonc");
+  const raw = JSON.parse(readFileSync(canonicalPath, "utf8")) as {
+    name: string;
+    env: { production: BuiltProductionFixture };
+  };
+  const production = raw.env.production;
+  mkdirSync(path.join(checkout, ".wrangler/deploy"), { recursive: true });
+  mkdirSync(path.join(checkout, "build/server"), { recursive: true });
+  mkdirSync(path.join(checkout, "build/client"), { recursive: true });
+  writeFileSync(
+    path.join(checkout, ".wrangler/deploy/config.json"),
+    JSON.stringify({
+      configPath: "../../build/server/wrangler.json",
+      auxiliaryWorkers: [],
+    }),
+  );
+  writeFileSync(
+    path.join(checkout, "build/server/wrangler.json"),
+    JSON.stringify({
+      configPath: canonicalPath,
+      userConfigPath: canonicalPath,
+      topLevelName: raw.name,
+      definedEnvironments: Object.keys(raw.env),
+      targetEnvironment: "production",
+      name: production.name,
+      main: "index.js",
+      assets: { directory: "../client" },
+      workers_dev: true,
+      vars: production.vars,
+      secrets: production.secrets,
+      d1_databases: production.d1_databases.map((database) => ({
+        ...database,
+        migrations_dir: "../../migrations",
+      })),
+      r2_buckets: production.r2_buckets,
+      workflows: production.workflows,
+      secrets_store_secrets: [],
+      no_bundle: true,
+    }),
+  );
+  writeFileSync(
+    path.join(checkout, "build/server/index.js"),
+    "export default {};\n",
+  );
+}
+
 function prompts(secretsFile: string, confirmCreate = true) {
   let confirmCount = 0;
   let secretCount = 0;
@@ -172,6 +228,14 @@ function successfulRunner(calls: Call[], override?: (call: Call) => unknown) {
       };
     if (args[0] === "r2" && args[2] === "info")
       return { stdout: JSON.stringify({ name: args[3] }), stderr: "" };
+    if (
+      command === "npm" &&
+      args[0] === "run" &&
+      args[1] === "build:production"
+    ) {
+      writeBuiltProductionFixture(options.cwd ?? "");
+      return { stdout: "", stderr: "" };
+    }
     if (args[0] === "deployments")
       throw new CommandError("missing worker", {
         stderr: missingWorkerDiagnostic,
@@ -865,6 +929,22 @@ describe("installer state machine", () => {
     expect(serializedCalls).not.toContain(tokenCanary);
     expect(serializedCalls).not.toContain(providerCanary);
     expect(serializedCalls).not.toContain(phraseCanary);
+    const deploy = calls.find((call) => call.args[0] === "deploy");
+    expect(deploy?.args).toEqual([
+      "deploy",
+      "--strict",
+      "--config",
+      path.join(checkout, "build/server/wrangler.json"),
+      "--secrets-file",
+      secretsFile,
+    ]);
+    expect(deploy?.args).not.toContain("--env");
+    expect(deploy?.options.env?.CLOUDFLARE_ENV).toBeUndefined();
+    expect(deploy?.options.env?.CLOUDFLARE_ACCOUNT_ID).toBe("account-1");
+    expect(deploy?.options.env?.CLOUDFLARE_API_TOKEN).toBe(tokenCanary);
+    expect(deploy?.options.env?.WRANGLER_OUTPUT_FILE_PATH).toMatch(
+      /wrangler-output-.*\.ndjson$/u,
+    );
     for (const call of calls) {
       if (call.options.env?.CLOUDFLARE_API_TOKEN)
         expect(call.command).toBe("wrangler");

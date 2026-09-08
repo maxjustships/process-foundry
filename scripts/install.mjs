@@ -20,6 +20,10 @@ import {
   writeInstallerConfig,
 } from "./installer/config.mjs";
 import { STATE_VERSION, WRANGLER_VERSION } from "./installer/constants.mjs";
+import {
+  productionDeployCommand,
+  productionDeployEnvironment,
+} from "./installer/deploy.mjs";
 import { installationNames } from "./installer/names.mjs";
 import {
   CancelledError,
@@ -661,6 +665,11 @@ export async function runInstaller(dependencies = {}) {
     }
   }
   if (state.steps.deploy !== "complete") {
+    const selectedDeploy = await productionDeployCommand({
+      checkout,
+      secretsFile: state.secretsFile,
+      installerState: state,
+    });
     const outputFile = path.join(
       paths.directory,
       `wrangler-output-${state.operationId}.ndjson`,
@@ -683,20 +692,13 @@ export async function runInstaller(dependencies = {}) {
     try {
       const deployed = command(
         run,
-        "wrangler",
-        [
-          "deploy",
-          "--strict",
-          "--env",
-          "production",
-          "--config",
-          "wrangler.jsonc",
-          "--secrets-file",
-          state.secretsFile,
-        ],
+        selectedDeploy.executable,
+        selectedDeploy.args,
         {
           cwd: checkout,
-          env: wranglerEnvironment(token, state.accountId, outputFile),
+          env: productionDeployEnvironment(
+            wranglerEnvironment(token, state.accountId, outputFile),
+          ),
         },
         "Worker and Workflow deployment",
         300_000,

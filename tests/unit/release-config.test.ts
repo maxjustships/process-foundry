@@ -64,7 +64,7 @@ const secretNames = [
 const templateProductionDatabaseId = "00000000-0000-0000-0000-000000000000";
 const deployerProductionDatabaseId = "123e4567-e89b-42d3-a456-426614174000";
 const deployProductionCommand =
-  'test -n "$BPMN_BUILDER_PRODUCTION_SECRETS" && test -f "$BPMN_BUILDER_PRODUCTION_SECRETS" && test -s "$BPMN_BUILDER_PRODUCTION_SECRETS" && node scripts/assert-deploy-ready-config.mjs --secrets-file "$BPMN_BUILDER_PRODUCTION_SECRETS" && npm run build:production && CLOUDFLARE_ENV=production wrangler deploy --strict --env production --config wrangler.jsonc --secrets-file "$BPMN_BUILDER_PRODUCTION_SECRETS"';
+  'test -n "$BPMN_BUILDER_PRODUCTION_SECRETS" && test -f "$BPMN_BUILDER_PRODUCTION_SECRETS" && test -s "$BPMN_BUILDER_PRODUCTION_SECRETS" && node scripts/assert-deploy-ready-config.mjs --secrets-file "$BPMN_BUILDER_PRODUCTION_SECRETS" && npm run build:production && node scripts/deploy-production.mjs --secrets-file "$BPMN_BUILDER_PRODUCTION_SECRETS"';
 
 function productionConfigFixture(
   fixtureRoot: string,
@@ -82,11 +82,50 @@ function prepareDeployFixture(
   fixtureRoot: string,
   production: WranglerEnvironment | undefined,
 ) {
-  productionConfigFixture(fixtureRoot, production);
+  const configPath = productionConfigFixture(fixtureRoot, production);
   symlinkSync(
     path.join(root, "scripts"),
     path.join(fixtureRoot, "scripts"),
     "dir",
+  );
+  if (!production) return;
+  mkdirSync(path.join(fixtureRoot, ".wrangler/deploy"), { recursive: true });
+  mkdirSync(path.join(fixtureRoot, "build/server"), { recursive: true });
+  mkdirSync(path.join(fixtureRoot, "build/client"), { recursive: true });
+  writeFileSync(
+    path.join(fixtureRoot, ".wrangler/deploy/config.json"),
+    JSON.stringify({
+      configPath: "../../build/server/wrangler.json",
+      auxiliaryWorkers: [],
+    }),
+  );
+  writeFileSync(
+    path.join(fixtureRoot, "build/server/wrangler.json"),
+    JSON.stringify({
+      configPath,
+      userConfigPath: configPath,
+      topLevelName: undefined,
+      definedEnvironments: ["production"],
+      targetEnvironment: "production",
+      name: production.name,
+      main: "index.js",
+      assets: { directory: "../client" },
+      workers_dev: production.workers_dev,
+      vars: production.vars,
+      secrets: production.secrets,
+      d1_databases: production.d1_databases?.map((database) => ({
+        ...database,
+        migrations_dir: "../../migrations",
+      })),
+      r2_buckets: production.r2_buckets,
+      workflows: production.workflows,
+      secrets_store_secrets: [],
+      no_bundle: true,
+    }),
+  );
+  writeFileSync(
+    path.join(fixtureRoot, "build/server/index.js"),
+    "export default {};\n",
   );
 }
 
@@ -221,7 +260,7 @@ describe("production release configuration", () => {
       "wrangler d1 migrations apply DB --remote --env production --config wrangler.jsonc",
     );
     expect(packageJson.scripts["deploy:dry-run:production"]).toBe(
-      "npm run build:production && CLOUDFLARE_ENV=production wrangler deploy --dry-run",
+      "npm run build:production && node scripts/deploy-production.mjs --dry-run",
     );
     expect(packageJson.scripts["deploy:production"]).toBe(
       deployProductionCommand,
@@ -499,7 +538,8 @@ describe("production release configuration", () => {
       expect(readFileSync(callsFile, "utf8").split("\n")).toEqual([
         `guard:scripts/assert-deploy-ready-config.mjs --secrets-file ${secretsFile}`,
         "npm:run build:production",
-        "wrangler:deploy:--strict:--env:argc=8:env=production",
+        `guard:scripts/deploy-production.mjs --secrets-file ${secretsFile}`,
+        "wrangler:deploy:--strict:--config:argc=6:env=",
         "",
       ]);
     } finally {
