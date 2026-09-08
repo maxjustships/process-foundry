@@ -28,6 +28,9 @@ import {
 } from "../../scripts/bootstrap.mjs";
 import {
   assertNoCollisions,
+  inspectD1,
+  inspectR2,
+  inspectWorker,
   parseCreatedDatabaseId,
   parseWhoami,
 } from "../../scripts/installer/cloudflare.mjs";
@@ -50,6 +53,12 @@ const providerCanary = "openai-key-canary-00de7301";
 const phraseCanary = "mnemonic phrase canary 90dc61";
 const databaseId = "123e4567-e89b-42d3-a456-426614174000";
 const releaseRef = "a".repeat(40);
+const missingWorkerDiagnostic =
+  "\u001b[31m\u2718 [ERROR]\u001b[0m \u001b[1mA request to the Cloudflare API (/accounts/account-fixture-1234/workers/scripts/pf-fixture-worker/deployments) failed.\u001b[0m\n\n  This Worker does not exist on your account. [code: 10007]\n";
+const missingR2Diagnostic =
+  "\u001b[31m\u2718 [ERROR]\u001b[0m \u001b[1mA request to the Cloudflare API (/accounts/account-fixture-1234/r2/buckets/pf-fixture-sources) failed.\u001b[0m\n\n  The specified bucket does not exist. [code: 10006]\n";
+const missingD1Diagnostic =
+  "\u001b[31m\u2718 [ERROR]\u001b[0m \u001b[1mCouldn't find a D1 DB with name or binding 'pf-fixture-db' in your config or the API.\u001b[0m\n";
 
 function fixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "pf-installer-test-"));
@@ -165,7 +174,7 @@ function successfulRunner(calls: Call[], override?: (call: Call) => unknown) {
       return { stdout: JSON.stringify({ name: args[3] }), stderr: "" };
     if (args[0] === "deployments")
       throw new CommandError("missing worker", {
-        stderr: "script_not_found 10090",
+        stderr: missingWorkerDiagnostic,
       });
     if (args[0] === "d1" && args[1] === "create")
       return { stdout: `database_id = "${databaseId}"`, stderr: "" };
@@ -485,6 +494,137 @@ describe("installer primitives", () => {
         { database: "target-db", bucket: "target-sources", worker: "target" },
       ),
     ).toThrow(/will not be overwritten/u);
+  });
+
+  it("recognizes captured resource-specific missing diagnostics", () => {
+    const missing = (stderr: string) => () => {
+      throw new CommandError("ownership lookup failed", { stderr });
+    };
+
+    expect(
+      inspectWorker({
+        checkout: "/fixture/checkout",
+        token: "fixture-token",
+        accountId: "account-fixture-1234",
+        worker: "pf-fixture-worker",
+        run: missing(missingWorkerDiagnostic),
+      }),
+    ).toEqual({ exists: false, deployments: [] });
+    expect(
+      inspectR2({
+        checkout: "/fixture/checkout",
+        token: "fixture-token",
+        accountId: "account-fixture-1234",
+        bucket: "pf-fixture-sources",
+        run: missing(missingR2Diagnostic),
+      }),
+    ).toEqual({ exists: false });
+    expect(
+      inspectD1({
+        checkout: "/fixture/checkout",
+        token: "fixture-token",
+        accountId: "account-fixture-1234",
+        database: "pf-fixture-db",
+        run: missing(missingD1Diagnostic),
+      }),
+    ).toEqual({ exists: false });
+  });
+
+  it.each([
+    [
+      "Worker permission failure",
+      inspectWorker,
+      { worker: "pf-fixture-worker" },
+      "A request to the Cloudflare API failed with HTTP 403. Authentication error [code: 10000]",
+    ],
+    [
+      "R2 permission failure",
+      inspectR2,
+      { bucket: "pf-fixture-sources" },
+      "A request to the Cloudflare API failed with HTTP 403. Authentication error [code: 10000]",
+    ],
+    [
+      "Worker unrelated missing response",
+      inspectWorker,
+      { worker: "pf-fixture-worker" },
+      missingR2Diagnostic,
+    ],
+    [
+      "R2 unrelated missing response",
+      inspectR2,
+      { bucket: "pf-fixture-sources" },
+      missingWorkerDiagnostic,
+    ],
+  ])("fails closed for %s", (_label, inspect, resource, stderr) => {
+    const failure = new CommandError("ownership lookup failed", { stderr });
+    expect(() =>
+      inspect({
+        checkout: "/fixture/checkout",
+        token: "fixture-token",
+        accountId: "account-fixture-1234",
+        ...resource,
+        run: () => {
+          throw failure;
+        },
+      }),
+    ).toThrow(failure);
+  });
+
+  it("fails closed for malformed successful inspection responses", () => {
+    expect(() =>
+      inspectWorker({
+        checkout: "/fixture/checkout",
+        token: "fixture-token",
+        accountId: "account-fixture-1234",
+        worker: "pf-fixture-worker",
+        run: () => ({ stdout: "not JSON", stderr: "" }),
+      }),
+    ).toThrow(/malformed JSON/u);
+    expect(() =>
+      inspectR2({
+        checkout: "/fixture/checkout",
+        token: "fixture-token",
+        accountId: "account-fixture-1234",
+        bucket: "pf-fixture-sources",
+        run: () => ({ stdout: "not JSON", stderr: "" }),
+      }),
+    ).toThrow(/malformed JSON/u);
+  });
+
+  it("recognizes existing exact R2 and Worker objects", () => {
+    const deployment = workerDeployment("fixture-deployment");
+    const run = (
+      _command: string,
+      args: string[],
+      options: Call["options"],
+    ) => {
+      expect(options.env?.CLOUDFLARE_ACCOUNT_ID).toBe("account-fixture-1234");
+      if (args[0] === "deployments")
+        return { stdout: JSON.stringify([deployment]), stderr: "" };
+      return {
+        stdout: JSON.stringify({ name: "pf-fixture-sources" }),
+        stderr: "",
+      };
+    };
+
+    expect(
+      inspectWorker({
+        checkout: "/fixture/checkout",
+        token: "fixture-token",
+        accountId: "account-fixture-1234",
+        worker: "pf-fixture-worker",
+        run,
+      }),
+    ).toEqual({ exists: true, deployments: [deployment] });
+    expect(
+      inspectR2({
+        checkout: "/fixture/checkout",
+        token: "fixture-token",
+        accountId: "account-fixture-1234",
+        bucket: "pf-fixture-sources",
+        run,
+      }),
+    ).toEqual({ exists: true, name: "pf-fixture-sources" });
   });
 
   it("keeps application secrets out of generic child environments and redacts output", () => {
@@ -983,7 +1123,8 @@ describe("installer state machine", () => {
                 call.args[2] === "info");
             if (isLookup && !exists)
               throw new CommandError("verified missing", {
-                stderr: "resource not found 404",
+                stderr:
+                  step === "d1" ? missingD1Diagnostic : missingR2Diagnostic,
               });
           }),
           fetch: () => Promise.resolve({ ok: true, status: 200 }),

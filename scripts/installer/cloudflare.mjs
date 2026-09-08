@@ -106,6 +106,24 @@ function isMissing(error) {
   );
 }
 
+function isMissingR2Bucket(error) {
+  return (
+    error instanceof CommandError &&
+    /the specified bucket does not exist\.\s*\[code:\s*10006\]/iu.test(
+      error.stderr,
+    )
+  );
+}
+
+function isMissingWorker(error) {
+  return (
+    error instanceof CommandError &&
+    /this Worker does not exist on your account\.\s*\[code:\s*10007\]/iu.test(
+      error.stderr,
+    )
+  );
+}
+
 function parseJsonObject(source, label) {
   let parsed;
   try {
@@ -159,7 +177,7 @@ export function inspectR2({
       throw new Error("R2 ownership lookup returned no exact bucket name.");
     return { exists: true, name: parsed.name };
   } catch (error) {
-    if (isMissing(error)) return { exists: false };
+    if (isMissingR2Bucket(error)) return { exists: false };
     throw error;
   }
 }
@@ -217,7 +235,7 @@ export function inspectWorker({
     );
     return { exists: true, deployments: parseDeployments(result.stdout) };
   } catch (error) {
-    if (isMissing(error)) return { exists: false, deployments: [] };
+    if (isMissingWorker(error)) return { exists: false, deployments: [] };
     throw error;
   }
 }
