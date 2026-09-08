@@ -66,7 +66,7 @@ describe("direct OpenAI contract", () => {
     const body = buildExtractionRequest(
       [{ kind: "text", text: "safe test fixture" }],
       "en",
-      [],
+      ["source_text"],
     );
     expect(body.model).toBe("gpt-5.6-terra");
     expect(body.reasoning).toEqual({ effort: "high" });
@@ -78,7 +78,7 @@ describe("direct OpenAI contract", () => {
   });
 
   it("instructs extraction and bounded repair about evidence-first graph invariants", async () => {
-    const body = buildExtractionRequest([], "ru", []);
+    const body = buildExtractionRequest([], "ru", ["source_text"]);
     const requestJson = JSON.stringify(body);
     expect(requestJson).toContain("laneId");
     expect(requestJson).toContain("Owner to confirm");
@@ -143,7 +143,9 @@ describe("direct OpenAI contract", () => {
     });
     expect(question?.text).toContain("Which business process and handoffs");
     expect(ir).not.toHaveProperty("diagramType");
-    const request = JSON.stringify(buildExtractionRequest([], "en", []));
+    const request = JSON.stringify(
+      buildExtractionRequest([], "en", ["source_text"]),
+    );
     expect(request).toContain("BPMN 2.0 only");
     expect(request).toContain("architecture or data-flow");
   });
@@ -180,7 +182,8 @@ describe("direct OpenAI contract", () => {
   });
 
   it("requires every provider object property and makes logical optionals nullable", () => {
-    const schema = buildExtractionRequest([], "en", []).text.format.schema;
+    const schema = buildExtractionRequest([], "en", ["source_text"]).text
+      .format.schema;
 
     expectEveryObjectPropertyRequired(schema);
     expectNullable(
@@ -249,6 +252,18 @@ describe("direct OpenAI contract", () => {
       eligibleSourceIds,
     );
     expect(eligibleSourceIds).toEqual(["source_original", "source_refinement"]);
+  });
+
+  it("rejects empty source eligibility before any provider request", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(extractProcess("test-key", [], "en", [])).rejects.toMatchObject({
+      code: "provider_source_eligibility_empty",
+      message: "Process extraction requires at least one eligible source.",
+      retryable: false,
+    } satisfies Partial<ProviderError>);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("normalizes nullable provider fields to the domain optional shape", async () => {
@@ -426,7 +441,7 @@ describe("direct OpenAI contract", () => {
       );
 
       await expect(
-        extractProcess("test-key", [], "en", []),
+        extractProcess("test-key", [], "en", ["source_text"]),
       ).rejects.toMatchObject({
         code: "provider_response_not_completed",
         message: "The extraction provider did not complete the response.",
@@ -472,7 +487,7 @@ describe("direct OpenAI contract", () => {
       );
 
       await expect(
-        extractProcess("test-key", [], "en", []),
+        extractProcess("test-key", [], "en", ["source_text"]),
       ).rejects.toMatchObject({
         code: "provider_missing_output",
         message: "The extraction provider returned no structured output.",
@@ -491,7 +506,7 @@ describe("direct OpenAI contract", () => {
     );
 
     await expect(
-      extractProcess("test-key", [], "en", []),
+      extractProcess("test-key", [], "en", ["source_text"]),
     ).rejects.toMatchObject({
       code: "openai_extraction_500",
       message: "Process extraction could not be completed.",

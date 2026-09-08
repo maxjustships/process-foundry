@@ -13,6 +13,16 @@ export const MAX_EXTRACTION_OUTPUT_TOKENS = 16_384;
 export const PROMPT_VERSION = "extract-process/4" as const;
 export const SCHEMA_VERSION = "process-ir/1" as const;
 
+export class ProviderError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly retryable = false,
+  ) {
+    super(message);
+  }
+}
+
 export type ExtractionInput =
   { kind: "text"; text: string } | { kind: "image"; dataUrl: string };
 
@@ -136,6 +146,11 @@ const sourceIdSchemaPaths = [
 function providerSchemaWithEligibleSourceIds(
   eligibleSourceIds: readonly string[],
 ): unknown {
+  if (eligibleSourceIds.length === 0)
+    throw new ProviderError(
+      "provider_source_eligibility_empty",
+      "Process extraction requires at least one eligible source.",
+    );
   const schema = structuredClone(providerProcessIrJsonSchema);
   for (const path of sourceIdSchemaPaths) {
     let current = schema;
@@ -333,16 +348,6 @@ function extractOutputText(
     "provider_missing_output",
     "The extraction provider returned no structured output.",
   );
-}
-
-export class ProviderError extends Error {
-  constructor(
-    public readonly code: string,
-    message: string,
-    public readonly retryable = false,
-  ) {
-    super(message);
-  }
 }
 
 export function assertEligibleSourceReferences(

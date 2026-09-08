@@ -92,25 +92,33 @@ export async function loadExtractionInputsForJob(
   env: Env,
   jobId: string,
 ): ReturnType<typeof loadExtractionInputs> {
-  return (await loadExtractionContextForJob(env, jobId)).inputs;
+  return (await loadExtractionPayloadForJob(env, jobId)).inputs;
+}
+
+async function loadExtractionPayloadForJob(
+  env: Env,
+  jobId: string,
+): Promise<{
+  sources: SourceRow[];
+  inputs: Awaited<ReturnType<typeof loadExtractionInputs>>;
+}> {
+  const [sources, baseVersion] = await Promise.all([
+    getJobSources(env.DB, jobId),
+    getJobBaseVersion(env.DB, jobId),
+  ]);
+  return {
+    sources,
+    inputs: await loadExtractionInputs(env, sources, baseVersion),
+  };
 }
 
 export async function loadExtractionContextForJob(
   env: Env,
   jobId: string,
 ): Promise<{
-  inputs: Awaited<ReturnType<typeof loadExtractionInputs>>;
   eligibleSourceIds: string[];
 }> {
-  const [sources, baseVersion, eligibleSourceIds] = await Promise.all([
-    getJobSources(env.DB, jobId),
-    getJobBaseVersion(env.DB, jobId),
-    getJobEligibleSourceIds(env.DB, jobId),
-  ]);
-  return {
-    inputs: await loadExtractionInputs(env, sources, baseVersion),
-    eligibleSourceIds,
-  };
+  return { eligibleSourceIds: await getJobEligibleSourceIds(env.DB, jobId) };
 }
 
 async function extractProcessForWorkflow(
@@ -129,7 +137,8 @@ async function extractProcessForWorkflow(
   } catch (error) {
     if (
       error instanceof ProviderError &&
-      error.code === "provider_unknown_source_reference"
+      (error.code === "provider_unknown_source_reference" ||
+        error.code === "provider_source_eligibility_empty")
     )
       throw new NonRetryableError(error.message, error.code);
     throw error;
@@ -270,7 +279,6 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
         async () => loadExtractionContextForJob(this.env, jobId),
       );
       const extractionContext = {
-        inputs: [...loadedExtractionContext.inputs],
         eligibleSourceIds: Object.freeze([
           ...loadedExtractionContext.eligibleSourceIds,
         ]),
@@ -284,7 +292,10 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
         },
         async () => {
           await setJobStatus(this.env.DB, jobId, "extracting");
-          const sources = await getJobSources(this.env.DB, jobId);
+          const { sources, inputs } = await loadExtractionPayloadForJob(
+            this.env,
+            jobId,
+          );
           if (this.env.MOCK_AI === "true") {
             const attemptCount = await this.env.DB.prepare(
               "SELECT COUNT(*) AS value FROM job_attempts WHERE job_id = ?",
@@ -293,7 +304,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
               .first<{ value: number }>();
             if (
               attemptCount?.value === 1 &&
-              extractionContext.inputs.some(
+              inputs.some(
                 (input) =>
                   input.kind === "text" &&
                   input.text.includes("[synthetic:fail-first-extraction]"),
@@ -302,7 +313,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
               throw new Error("Synthetic extraction failure.");
             const mockIr = getMockProcessIr(sources, outputLocale);
             if (
-              extractionContext.inputs.some(
+              inputs.some(
                 (input) =>
                   input.kind === "text" &&
                   input.text.includes("[synthetic:changed-owner-question]"),
@@ -315,7 +326,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
             return {
               ir: enforceBpmnOnlyModalityQuestion(
                 mockIr,
-                extractionContext.inputs,
+                inputs,
                 outputLocale,
               ),
               metadata: {
@@ -327,7 +338,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
           }
           return extractProcessForWorkflow(
             getRequiredSecret(this.env, "OPENAI_API_KEY"),
-            extractionContext.inputs,
+            inputs,
             outputLocale,
             extractionContext.eligibleSourceIds,
           );
@@ -343,7 +354,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<
           { retries: { limit: 1, delay: "10 seconds" }, timeout: "10 minutes" },
           async () => {
             const inputs = [
-              ...extractionContext.inputs,
+              ...(await loadExtractionInputsForJob(this.env, jobId)),
               {
                 kind: "text",
                 text: buildProcessIrRepairInstruction(
