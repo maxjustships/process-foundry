@@ -1,0 +1,81 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "bpmn-builder-v0",
+  "main": "./workers/app.ts",
+  "compatibility_date": "2026-08-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 },
+  },
+  "upload_source_maps": true,
+  "vars": {
+    "APP_VERSION": "0.1.0",
+    "MOCK_AI": "true",
+    "MOCK_AI_DELAY_MS": "0",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bpmn-builder-v0",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "SOURCES",
+      "bucket_name": "bpmn-builder-v0-sources",
+    },
+  ],
+  "workflows": [
+    {
+      "binding": "GENERATION_WORKFLOW",
+      "name": "bpmn-builder-generation",
+      "class_name": "GenerationWorkflow",
+    },
+  ],
+  "env": {
+    "production": {
+      "name": "process-foundry",
+      "workers_dev": true,
+      "vars": {
+        "APP_VERSION": "0.1.0",
+        "MOCK_AI": "false",
+        "MOCK_AI_DELAY_MS": "0",
+      },
+      "secrets": {
+        "required": [
+          "AUTH_PHRASE_SALT",
+          "AUTH_PHRASE_VERIFIER",
+          "SESSION_SIGNING_KEY",
+          "OPENAI_API_KEY",
+          "FEEDBACK_EXPORT_TOKEN",
+        ],
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "process-foundry-production",
+          // Placeholder: replace with the deployer-owned D1 database UUID.
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations",
+        },
+      ],
+      "r2_buckets": [
+        {
+          "binding": "SOURCES",
+          "bucket_name": "process-foundry-production-sources",
+        },
+      ],
+      "workflows": [
+        {
+          "binding": "GENERATION_WORKFLOW",
+          "name": "process-foundry-production-generation",
+          "class_name": "GenerationWorkflow",
+        },
+      ],
+    },
+  },
+}

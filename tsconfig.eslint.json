@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.cloudflare.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "composite": false,
+    "types": ["node", "vite/client", "@cloudflare/vitest-plugin/types"]
+  },
+  "include": [
+    "app/**/*",
+    "workers/**/*",
+    "domain/**/*",
+    "ai/**/*",
+    "tests/**/*",
+    "scripts/**/*",
+    "*.config.ts",
+    "eslint.config.js",
+    "worker-configuration.d.ts"
+  ]
+}

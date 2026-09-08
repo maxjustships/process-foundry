@@ -1,0 +1,7 @@
+build
+.react-router
+.wrangler
+node_modules
+worker-configuration.d.ts
+package-lock.json
+.hermes/plans/2026-08-26_123819-tester-priorities.md

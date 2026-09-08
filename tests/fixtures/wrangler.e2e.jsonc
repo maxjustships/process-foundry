@@ -1,0 +1,36 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "bpmn-builder-v0-e2e",
+  "main": "../../workers/app.ts",
+  "compatibility_date": "2026-08-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "APP_VERSION": "0.1.0-e2e",
+    "MOCK_AI": "true",
+    "MOCK_AI_DELAY_MS": "30000",
+    "AUTH_PHRASE_SALT": "YnBtbi1idWlsZGVyLWUyZQ",
+    "AUTH_PHRASE_VERIFIER": "mQR0bBCPoj4bGio8UUhrbzyb1TK4klPbw9YfgJHRArY",
+    "SESSION_SIGNING_KEY": "e2e-only-session-signing-key-not-a-secret",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bpmn-builder-v0-e2e",
+      "database_id": "00000000-0000-0000-0000-000000000002",
+      "migrations_dir": "../../migrations",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "SOURCES",
+      "bucket_name": "bpmn-builder-v0-e2e-sources",
+    },
+  ],
+  "workflows": [
+    {
+      "binding": "GENERATION_WORKFLOW",
+      "name": "bpmn-builder-generation-e2e",
+      "class_name": "GenerationWorkflow",
+    },
+  ],
+}

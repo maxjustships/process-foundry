@@ -1,0 +1,8 @@
+# LOCAL DEVELOPMENT ONLY. Copy to .dev.vars and replace every placeholder.
+# These values are deliberately unusable outside a mocked local setup. Never commit .dev.vars.
+MOCK_AI=true
+AUTH_PHRASE_SALT=replace-with-derive-auth-output
+AUTH_PHRASE_VERIFIER=replace-with-derive-auth-output
+SESSION_SIGNING_KEY=replace-with-at-least-32-random-bytes
+OPENAI_API_KEY=unused-local-mock-placeholder
+FEEDBACK_EXPORT_TOKEN=replace-with-an-independent-random-token
