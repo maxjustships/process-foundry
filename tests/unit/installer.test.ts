@@ -1328,7 +1328,7 @@ describe("masked terminal input", () => {
     writeFileSync(
       harness,
       cancel
-        ? `import {promptSecret,CancelledError} from ${JSON.stringify(promptUrl)}; try { await promptSecret("Secret"); } catch (error) { if (error instanceof CancelledError) process.exit(130); throw error; }`
+        ? `import {promptSecret,CancelledError} from ${JSON.stringify(promptUrl)}; try { await promptSecret("Secret"); } catch (error) { if (error instanceof CancelledError) { console.log("restored="+String(!process.stdin.isRaw && !process.stdin.destroyed)); process.exitCode=130; } else throw error; }`
         : `import {promptSecret} from ${JSON.stringify(promptUrl)}; const value=await promptSecret("Secret"); console.log("length="+value.length);`,
     );
     return await new Promise<{ code: number | null; output: string }>(
@@ -1370,6 +1370,61 @@ describe("masked terminal input", () => {
   it("handles Ctrl-C in a real PTY", async () => {
     const result = await ptyRun(true);
     expect(result.code).toBe(130);
+    expect(result.output).toContain("restored=true");
+    expect(result.output).not.toContain(phraseCanary);
+  });
+
+  it("reads sequential prompts from the same real PTY", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pf-prompt-sequence-"));
+    fixtureRoots.push(root);
+    const harness = path.join(root, "harness.mjs");
+    const promptUrl = pathToFileURL(
+      path.resolve("scripts/installer/prompt.mjs"),
+    ).href;
+    writeFileSync(
+      harness,
+      `import {promptConfirm,promptSecret,promptText} from ${JSON.stringify(promptUrl)};
+const method=await promptText("Method",{defaultValue:"token-file"});
+const tokenFile=await promptText("Token file");
+const secret=await promptSecret("Secret");
+const confirmed=await promptConfirm("Continue");
+console.log("result="+JSON.stringify({method,tokenFile,secretLength:secret.length,confirmed}));`,
+    );
+
+    const result = await new Promise<{ code: number | null; output: string }>(
+      (resolve, reject) => {
+        const child = spawn(
+          "script",
+          ["-qefc", `${process.execPath} ${harness}`, "/dev/null"],
+          { stdio: ["pipe", "pipe", "pipe"] },
+        );
+        const responses = [
+          ["Method:", "token-file\r"],
+          ["Token file:", "/tmp/fake-token\r"],
+          ["Secret (input hidden):", `${phraseCanary}\r`],
+          ["Continue [y/N]:", "y\r"],
+        ] as const;
+        let output = "";
+        let responseIndex = 0;
+        const onData = (chunk: Buffer) => {
+          output += chunk.toString();
+          const response = responses[responseIndex];
+          if (response && output.includes(response[0])) {
+            responseIndex += 1;
+            child.stdin.write(response[1]);
+          }
+        };
+        child.stdout.on("data", onData);
+        child.stderr.on("data", onData);
+        child.on("error", reject);
+        child.on("close", (code) => resolve({ code, output }));
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.output).toContain(
+      `result={"method":"token-file","tokenFile":"/tmp/fake-token","secretLength":${phraseCanary.length},"confirmed":true}`,
+    );
     expect(result.output).not.toContain(phraseCanary);
   });
 });

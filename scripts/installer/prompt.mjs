@@ -15,12 +15,13 @@ async function readInput({
     throw new Error("Run the installer in an interactive terminal.");
   const wasRaw = input.isRaw;
   input.setRawMode(true);
-  input.resume();
   input.setEncoding("utf8");
   output.write(message);
   let value = "";
   try {
-    read: for await (const chunk of input) {
+    read: for await (const chunk of input.iterator({
+      destroyOnReturn: false,
+    })) {
       for (const key of chunk) {
         if (key === "\u0003") throw new CancelledError();
         if (key === "\r" || key === "\n") break read;
