@@ -8,7 +8,13 @@ export function PublicHeader({ compact = false }: { compact?: boolean }) {
         className="public-wordmark"
         aria-label="Process Foundry home"
       >
-        <span aria-hidden="true">PF</span>
+        <img
+          src="/process-foundry-mark.png"
+          alt=""
+          width="38"
+          height="38"
+          aria-hidden="true"
+        />
         <strong>Process Foundry</strong>
       </Link>
       <nav aria-label="Public navigation">

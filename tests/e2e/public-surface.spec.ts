@@ -70,12 +70,13 @@ test("landing command keeps a manual-copy fallback", async ({ page }) => {
     });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Copy command" }).click();
-  await expect(page.getByRole("status")).toHaveText(
+  const heroCommand = page.locator(".landing-hero .landing-command");
+  await heroCommand.getByRole("button", { name: "Copy command" }).click();
+  await expect(heroCommand.getByRole("status")).toHaveText(
     "Clipboard access failed. Select the command to copy it manually.",
   );
   await expect(
-    page.getByText(
+    heroCommand.getByText(
       "bash -o pipefail -c 'curl -fsSL https://github.com/maxjustships/process-foundry/releases/latest/download/install.sh | bash'",
     ),
   ).toHaveCSS("user-select", "text");
@@ -112,24 +113,40 @@ test("public landing leads to an isolated interactive demo", async ({
   for (const metric of titleLineMetrics)
     expect(metric.height).toBeLessThanOrEqual(metric.lineHeight * 1.2);
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
-  await expect(page.locator(".landing-proof .djs-container")).toHaveCount(0);
+  const whySection = page.locator(".landing-why");
+  await expect(whySection.locator("figure, img, figcaption")).toHaveCount(0);
+  await expect(page.locator(".landing-faq details")).toHaveCount(7);
   await expect(page.locator(".landing-method li")).toHaveCount(4);
-  const primaryAction = page.getByRole("button", {
+  await expect(page.locator(".landing-command code")).toHaveCount(2);
+  await expect(
+    page.locator(".public-header").getByRole("link", { name: "Self-host" }),
+  ).toHaveAttribute("href", "/#self-hosting");
+  const heroCommand = page.locator(".landing-hero .landing-command");
+  const finalCommand = page.locator("#self-hosting .landing-command");
+  const primaryAction = heroCommand.getByRole("button", {
     name: "Copy command",
   });
   const actionBox = await primaryAction.boundingBox();
   expect(actionBox).not.toBeNull();
   expect(actionBox!.y + actionBox!.height).toBeLessThanOrEqual(1_000);
   await primaryAction.click();
-  await expect(page.getByRole("status")).toHaveText(
+  await expect(heroCommand.getByRole("status")).toHaveText(
     "Command copied to clipboard.",
+  );
+  await expect(finalCommand.getByRole("button")).toHaveText("Copy command");
+  await expect(finalCommand.getByRole("status")).toHaveText(
+    "Select the command to copy it manually.",
   );
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
     "bash -o pipefail -c 'curl -fsSL https://github.com/maxjustships/process-foundry/releases/latest/download/install.sh | bash'",
   );
-  const proofBox = await page.locator(".landing-proof img").boundingBox();
-  expect(proofBox).not.toBeNull();
-  expect(proofBox!.width).toBeGreaterThan(1_000);
+  await finalCommand.getByRole("button", { name: "Copy command" }).click();
+  await expect(finalCommand.getByRole("status")).toHaveText(
+    "Command copied to clipboard.",
+  );
+  const artBox = await page.locator(".landing-hero-art img").boundingBox();
+  expect(artBox).not.toBeNull();
+  expect(artBox!.width).toBeGreaterThan(300);
   const demoLinkBox = await page
     .getByRole("link", { name: /interactive demo/i })
     .boundingBox();
@@ -246,22 +263,15 @@ test("public routes stay usable on a narrow viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await expect(
-    page.getByRole("button", { name: "Copy command" }),
+    page.locator(".landing-hero .landing-command button"),
   ).toBeVisible();
   const landingMethodItems = page.locator(".landing-method li");
   await expect(landingMethodItems).toHaveCount(4);
   await expectContainedByViewport(page, ".landing-method li");
-  const proofViewport = page.locator(".landing-proof-viewport");
-  const proofImage = proofViewport.locator("img");
-  const proofViewportBox = await proofViewport.boundingBox();
-  const proofImageBox = await proofImage.boundingBox();
-  expect(proofViewportBox).not.toBeNull();
-  expect(proofImageBox).not.toBeNull();
-  expect(proofViewportBox!.height).toBeGreaterThanOrEqual(400);
-  expect(proofViewportBox!.x + proofViewportBox!.width).toBeLessThanOrEqual(
-    390,
-  );
-  expect(proofImageBox!.width).toBeGreaterThanOrEqual(760);
+  const artBox = await page.locator(".landing-hero-art img").boundingBox();
+  expect(artBox).not.toBeNull();
+  expect(artBox!.x).toBeGreaterThanOrEqual(0);
+  expect(artBox!.x + artBox!.width).toBeLessThanOrEqual(390);
   expect(
     await page.evaluate(
       () =>
@@ -279,7 +289,9 @@ test("public routes stay usable on a narrow viewport", async ({ page }) => {
       );
     }),
   ).toBeLessThanOrEqual(1);
-  await expectContainedByViewport(page, ".landing-why-reasons > p");
+  await expectContainedByViewport(page, ".landing-why-copy > p");
+  await expectContainedByViewport(page, ".landing-faq details");
+  await expectContainedByViewport(page, "#self-hosting .landing-command");
   await page.goto("/demo");
   await expect(
     page.getByRole("heading", { name: /return review and resolution/i }),
@@ -443,6 +455,10 @@ test("public routes remain English when the workspace locale is Russian", async 
   await context.addCookies([
     { name: "bpmn_locale", value: "ru", url: baseURL! },
   ]);
+  await page.addInitScript(() => {
+    window.localStorage.setItem("locale", "ru");
+    window.localStorage.setItem("bpmn_locale", "ru");
+  });
 
   for (const path of ["/", "/demo"]) {
     await page.goto(path);

@@ -82,15 +82,21 @@ describe("public OSS surface", () => {
     ).toEqual(["Eligible", "Not eligible"]);
   });
 
-  it("keeps the landing proof real and the demo review-first", () => {
+  it("keeps the landing explanation text-only and the demo review-first", () => {
     const home = readFileSync(path.join(root, "app/routes/home.tsx"), "utf8");
     const demo = readFileSync(path.join(root, "app/routes/demo.tsx"), "utf8");
     const styles = readFileSync(path.join(root, "app/public.css"), "utf8");
+    const whySection = home.match(
+      /<section className="landing-why"[\s\S]*?<\/section>/u,
+    )?.[0];
 
     expect(home).not.toContain("BpmnEditorCore");
     expect(home).not.toContain("<BpmnEditorCore");
     expect(home).not.toContain("demoProject");
-    expect(home).toContain('src="/process-foundry-demo.webp"');
+    expect(home).not.toContain('src="/process-foundry-demo.webp"');
+    expect(home).toContain('src="/process-foundry-structure.webp"');
+    expect(whySection).toBeDefined();
+    expect(whySection).not.toMatch(/<(?:figure|img|figcaption)\b/u);
     expect(home).toContain(
       "bash -o pipefail -c 'curl -fsSL https://github.com/maxjustships/process-foundry/releases/latest/download/install.sh | bash'",
     );
@@ -101,6 +107,14 @@ describe("public OSS surface", () => {
     expect(home).toContain('role="status"');
     expect(home).toContain('className="landing-why"');
     expect(home).toContain('className="landing-how"');
+    expect(home).toContain('className="landing-faq"');
+    expect(home).toContain('id="self-hosting"');
+    expect(home.match(/\bquestion: "/gu)).toHaveLength(7);
+    expect(home).toContain('instanceId="hero"');
+    expect(home).toContain('instanceId="final"');
+    expect(home).toContain(
+      "const feedbackId = `install-copy-feedback-${instanceId}`",
+    );
     for (const action of [
       "Bring the evidence",
       "Map the process",
@@ -116,12 +130,15 @@ describe("public OSS surface", () => {
     expect(demo).toContain("minimumZoomWidth: 700");
     expect(demo).toContain("maximumWidth: 699");
     expect(demo).toContain("minimumZoom: 0.9");
+    expect(demo).toContain('locale="en"');
+    expect(demo).not.toContain("LanguageSwitcher");
     expect(demo).toContain("onSelectionChange={setSelectedElementId}");
     expect(styles).toContain("--demo-workspace-height: calc(100dvh - 156px)");
     expect(styles).toMatch(
       /\.landing-command-control \{[\s\S]*?display: grid;/u,
     );
-    expect(styles).toMatch(/\.landing-proof img \{[\s\S]*?display: block;/u);
+    expect(styles).not.toContain(".landing-proof");
+    expect(styles).toMatch(/\.landing-hero-art img \{[\s\S]*?display: block;/u);
     expect(styles).toMatch(/\.landing-method li \{[\s\S]*?display: grid;/u);
     expect(styles).toMatch(
       /\.demo-project-rail \{[\s\S]*?height: var\(--demo-workspace-height\)/u,
@@ -179,6 +196,7 @@ describe("public OSS surface", () => {
     );
     const home = readFileSync(path.join(root, "app/routes/home.tsx"), "utf8");
     const demo = readFileSync(path.join(root, "app/routes/demo.tsx"), "utf8");
+    const rootRoute = readFileSync(path.join(root, "app/root.tsx"), "utf8");
     const login = readFileSync(path.join(root, "app/routes/login.tsx"), "utf8");
     const privateRoutes = [
       "app/routes/projects.tsx",
@@ -188,7 +206,15 @@ describe("public OSS surface", () => {
 
     expect(header).toContain('to="/login?next=/projects"');
     expect(header).toContain('to="/#self-hosting"');
+    expect(header).toContain('src="/process-foundry-mark.png"');
     expect(header).toContain("Open workspace");
+    for (const asset of [
+      "/favicon-16.png",
+      "/favicon-32.png",
+      "/favicon.ico",
+      "/apple-touch-icon.png",
+    ])
+      expect(rootRoute).toContain(asset);
     expect(login).toContain('if (session) throw redirect("/projects")');
     expect(login).toContain('requestedNext === null ? "/projects"');
     expect(`${home}\n${demo}`).not.toMatch(/Deploy your own/u);

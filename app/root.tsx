@@ -16,7 +16,17 @@ import { DEFAULT_LOCALE, resolveLocale, t } from "./lib/i18n";
 import "./app.css";
 import "./public.css";
 
-export const links: Route.LinksFunction = () => [];
+export const links: Route.LinksFunction = () => [
+  { rel: "icon", type: "image/png", sizes: "32x32", href: "/favicon-32.png" },
+  { rel: "icon", type: "image/png", sizes: "16x16", href: "/favicon-16.png" },
+  { rel: "icon", sizes: "any", href: "/favicon.ico" },
+  {
+    rel: "apple-touch-icon",
+    type: "image/png",
+    sizes: "180x180",
+    href: "/apple-touch-icon.png",
+  },
+];
 
 export function loader({ request }: LoaderFunctionArgs) {
   const pathname = new URL(request.url).pathname;
