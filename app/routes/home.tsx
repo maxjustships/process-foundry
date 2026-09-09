@@ -134,7 +134,7 @@ export default function Home() {
             heading="Install in your Cloudflare account"
           />
 
-          <figure className="landing-hero-art" aria-hidden="true">
+          <div className="landing-hero-art" aria-hidden="true">
             <img
               src="/process-foundry-structure.webp"
               alt=""
@@ -143,7 +143,7 @@ export default function Home() {
               loading="eager"
               fetchPriority="high"
             />
-          </figure>
+          </div>
 
           <Link className="landing-demo-link" to="/demo">
             Explore the interactive demo

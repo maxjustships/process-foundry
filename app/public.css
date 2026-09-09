@@ -216,14 +216,25 @@
 }
 
 .landing-hero {
-  width: min(calc(100% - clamp(2rem, 6vw, 6rem)), 1500px);
+  position: relative;
+  isolation: isolate;
+  width: 100%;
   min-height: calc(100dvh - 72px);
-  margin-inline: auto;
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   align-content: center;
   column-gap: clamp(0.8rem, 1.7vw, 1.75rem);
   padding-block: clamp(3rem, 6vw, 5.75rem);
+  padding-inline: max(clamp(1rem, 3vw, 3rem), calc((100vw - 1500px) / 2));
+  overflow: clip;
+  background: var(--landing-canvas);
+}
+
+.landing-hero-copy,
+.landing-hero > .landing-command,
+.landing-demo-link {
+  position: relative;
+  z-index: 1;
 }
 
 .landing-hero-copy {
@@ -351,17 +362,44 @@
 }
 
 .landing-hero-art {
-  grid-column: 9 / -1;
-  grid-row: 2 / span 2;
-  align-self: center;
-  margin: clamp(2.5rem, 5vw, 4.75rem) -3vw 0 0;
-  mix-blend-mode: multiply;
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  margin: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+.landing-hero-art::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(
+    90deg,
+    var(--landing-canvas) 0%,
+    var(--landing-canvas) 36%,
+    color-mix(in oklch, var(--landing-canvas) 94%, transparent) 50%,
+    color-mix(in oklch, var(--landing-canvas) 74%, transparent) 66%,
+    color-mix(in oklch, var(--landing-canvas) 28%, transparent) 84%,
+    transparent 100%
+  );
 }
 
 .landing-hero-art img {
   width: 100%;
-  height: auto;
+  height: 100%;
   display: block;
+  object-fit: cover;
+  object-position: center 58%;
+  mix-blend-mode: multiply;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black 0%,
+    black 88%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, black 0%, black 88%, transparent 100%);
 }
 
 .landing-why {
@@ -599,9 +637,8 @@
     grid-column: 1 / 6;
   }
 
-  .landing-hero-art {
-    grid-column: 6 / -1;
-    margin-right: -4vw;
+  .landing-hero-art img {
+    object-position: 62% 58%;
   }
 
   .landing-why-intro,
@@ -616,7 +653,6 @@
 
 @media (max-width: 620px) {
   .landing-page .public-header,
-  .landing-hero,
   .landing-page .public-footer {
     width: min(calc(100% - 2rem), 1500px);
   }
@@ -628,6 +664,7 @@
   .landing-hero {
     display: block;
     padding-block: 2.75rem 3.25rem;
+    padding-inline: 1rem;
   }
 
   .landing-hero-copy h1 {
@@ -673,9 +710,20 @@
     margin-top: 0.7rem;
   }
 
-  .landing-hero-art {
-    width: min(100%, 34rem);
-    margin: 2.25rem auto 0;
+  .landing-hero-art::after {
+    background: linear-gradient(
+      90deg,
+      var(--landing-canvas) 0%,
+      var(--landing-canvas) 28%,
+      color-mix(in oklch, var(--landing-canvas) 96%, transparent) 48%,
+      color-mix(in oklch, var(--landing-canvas) 78%, transparent) 68%,
+      color-mix(in oklch, var(--landing-canvas) 34%, transparent) 88%,
+      transparent 100%
+    );
+  }
+
+  .landing-hero-art img {
+    object-position: 72% 55%;
   }
 
   .landing-why,

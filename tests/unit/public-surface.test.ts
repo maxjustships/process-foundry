@@ -95,6 +95,10 @@ describe("public OSS surface", () => {
     expect(home).not.toContain("demoProject");
     expect(home).not.toContain('src="/process-foundry-demo.webp"');
     expect(home).toContain('src="/process-foundry-structure.webp"');
+    expect(home).toContain(
+      '<div className="landing-hero-art" aria-hidden="true">',
+    );
+    expect(home).not.toContain('<figure className="landing-hero-art"');
     expect(whySection).toBeDefined();
     expect(whySection).not.toMatch(/<(?:figure|img|figcaption)\b/u);
     expect(home).toContain(
@@ -138,7 +142,15 @@ describe("public OSS surface", () => {
       /\.landing-command-control \{[\s\S]*?display: grid;/u,
     );
     expect(styles).not.toContain(".landing-proof");
-    expect(styles).toMatch(/\.landing-hero-art img \{[\s\S]*?display: block;/u);
+    expect(styles).toMatch(
+      /\.landing-hero-art \{[\s\S]*?position: absolute;[\s\S]*?inset: 0;[\s\S]*?pointer-events: none;/u,
+    );
+    expect(styles).toMatch(
+      /\.landing-hero-art::after \{[\s\S]*?linear-gradient\([\s\S]*?90deg,[\s\S]*?var\(--landing-canvas\) 0%,[\s\S]*?transparent 100%/u,
+    );
+    expect(styles).toMatch(
+      /\.landing-hero-art img \{[\s\S]*?width: 100%;[\s\S]*?height: 100%;[\s\S]*?display: block;[\s\S]*?object-fit: cover;/u,
+    );
     expect(styles).toMatch(/\.landing-method li \{[\s\S]*?display: grid;/u);
     expect(styles).toMatch(
       /\.demo-project-rail \{[\s\S]*?height: var\(--demo-workspace-height\)/u,

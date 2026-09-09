@@ -32,6 +32,76 @@ async function expectContainedByViewport(page: Page, selector: string) {
   }
 }
 
+async function expectHeroArtworkLayer(page: Page) {
+  const hero = page.locator(".landing-hero");
+  const artwork = hero.locator(".landing-hero-art");
+  const image = artwork.locator("img");
+
+  await expect(artwork).toHaveAttribute("aria-hidden", "true");
+  await expect(artwork).toHaveCSS("position", "absolute");
+  await expect(artwork).toHaveCSS("pointer-events", "none");
+  await expect(image).toHaveAttribute("alt", "");
+  await expect(image).toHaveCSS("object-fit", "cover");
+  await expect(hero.getByRole("img")).toHaveCount(0);
+
+  const [heroBox, artworkBox, imageBox] = await Promise.all([
+    hero.boundingBox(),
+    artwork.boundingBox(),
+    image.boundingBox(),
+  ]);
+  expect(heroBox).not.toBeNull();
+  expect(artworkBox).not.toBeNull();
+  expect(imageBox).not.toBeNull();
+
+  for (const box of [artworkBox!, imageBox!]) {
+    expect(Math.abs(box.x - heroBox!.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(box.y - heroBox!.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(box.width - heroBox!.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(box.height - heroBox!.height)).toBeLessThanOrEqual(1);
+  }
+
+  const overlay = await artwork.evaluate(
+    (element) => getComputedStyle(element, "::after").backgroundImage,
+  );
+  expect(overlay).toContain("linear-gradient(90deg");
+  expect(overlay).toContain("100%");
+  expect(overlay).toContain("rgba(0, 0, 0, 0)");
+
+  for (const selector of [
+    ".landing-hero > .landing-command button",
+    ".landing-demo-link",
+  ]) {
+    const control = page.locator(selector);
+    await expect(control).toBeVisible();
+    const presentation = await control.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        box.left + box.width / 2,
+        box.top + box.height / 2,
+      );
+      const styles = getComputedStyle(element);
+      return {
+        reachable: hit === element || (hit !== null && element.contains(hit)),
+        color: styles.color,
+        opacity: Number.parseFloat(styles.opacity),
+        fontSize: Number.parseFloat(styles.fontSize),
+      };
+    });
+    expect(presentation.reachable).toBe(true);
+    expect(presentation.color).not.toBe("rgba(0, 0, 0, 0)");
+    expect(presentation.opacity).toBeGreaterThan(0);
+    expect(presentation.fontSize).toBeGreaterThan(0);
+  }
+
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth ===
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(true);
+}
+
 test.beforeEach(async ({ context, baseURL }) => {
   expect(baseURL).toBeDefined();
   await context.addCookies([
@@ -80,6 +150,19 @@ test("landing command keeps a manual-copy fallback", async ({ page }) => {
       "bash -o pipefail -c 'curl -fsSL https://github.com/maxjustships/process-foundry/releases/latest/download/install.sh | bash'",
     ),
   ).toHaveCSS("user-select", "text");
+});
+
+test("landing artwork remains a full-hero decorative layer", async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 1_440, height: 1_000 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    await expectHeroArtworkLayer(page);
+  }
 });
 
 test("public landing leads to an isolated interactive demo", async ({
@@ -144,9 +227,6 @@ test("public landing leads to an isolated interactive demo", async ({
   await expect(finalCommand.getByRole("status")).toHaveText(
     "Command copied to clipboard.",
   );
-  const artBox = await page.locator(".landing-hero-art img").boundingBox();
-  expect(artBox).not.toBeNull();
-  expect(artBox!.width).toBeGreaterThan(300);
   const demoLinkBox = await page
     .getByRole("link", { name: /interactive demo/i })
     .boundingBox();
@@ -268,10 +348,7 @@ test("public routes stay usable on a narrow viewport", async ({ page }) => {
   const landingMethodItems = page.locator(".landing-method li");
   await expect(landingMethodItems).toHaveCount(4);
   await expectContainedByViewport(page, ".landing-method li");
-  const artBox = await page.locator(".landing-hero-art img").boundingBox();
-  expect(artBox).not.toBeNull();
-  expect(artBox!.x).toBeGreaterThanOrEqual(0);
-  expect(artBox!.x + artBox!.width).toBeLessThanOrEqual(390);
+  await expectHeroArtworkLayer(page);
   expect(
     await page.evaluate(
       () =>
